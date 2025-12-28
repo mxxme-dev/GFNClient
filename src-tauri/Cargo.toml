@@ -15,6 +15,12 @@ crate-type = ["lib", "cdylib", "staticlib"]
 name = "opennow"
 path = "src/main.rs"
 
+# Native streamer binary (high-performance, hardware-accelerated)
+[[bin]]
+name = "gfn-streamer"
+path = "src/bin/gfn_streamer/main.rs"
+required-features = ["native-streamer"]
+
 
 [build-dependencies]
 tauri-build = { version = "2.0", features = [], optional = true }
@@ -52,7 +58,7 @@ rand = "0.8"
 # Native client dependencies (winit is pure Rust - no CMake needed)
 winit = "0.30"
 softbuffer = "0.4"
-webrtc = "0.11"
+webrtc = "0.14"
 bytes = "1.5"
 anyhow = "1.0"
 
@@ -69,6 +75,35 @@ egui_extras = { version = "0.29", features = ["image"] }
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 rfd = "0.15"
 
+# Native streamer dependencies (hardware-accelerated video pipeline)
+wgpu = { version = "23", optional = true }
+bytemuck = { version = "1.14", features = ["derive"], optional = true }
+pollster = { version = "0.4", optional = true }
+ringbuf = { version = "0.4", optional = true }
+sdl2 = { version = "0.38", features = ["bundled", "static-link", "raw-window-handle"], optional = true }
+raw-window-handle = { version = "0.6", optional = true }
+glyphon = { version = "0.7", optional = true }
+# FFmpeg for NVDEC hardware decoding (h264_cuvid/hevc_cuvid)
+# Install: download from https://github.com/BtbN/FFmpeg-Builds/releases
+# Extract to C:\ffmpeg and set FFMPEG_DIR=C:\ffmpeg
+ffmpeg-next = { version = "7", optional = true }
+# Note: Audio decoding uses raw PCM for now; Opus support requires system libopus
+
+# Windows Media Foundation for hardware video decoding (DXVA2/D3D11VA)
+[target.'cfg(target_os = "windows")'.dependencies.windows]
+version = "0.58"
+optional = true
+features = [
+    "Win32_Foundation",
+    "Win32_Media_MediaFoundation",
+    "Win32_System_Com",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Foundation",
+    "Media_MediaProperties",
+]
+
 # macOS specific
 [target.'cfg(target_os = "macos")'.dependencies]
 core-graphics = "0.24"
@@ -78,6 +113,7 @@ default = ["tauri-app"]
 tauri-app = ["tauri", "tauri-plugin-shell", "tauri-plugin-http", "tauri-plugin-store", "custom-protocol", "tauri-build"]
 custom-protocol = ["tauri/custom-protocol"]
 native-client = []
+native-streamer = ["wgpu", "bytemuck", "pollster", "ringbuf", "sdl2", "raw-window-handle", "windows", "glyphon", "ffmpeg-next"]
 
 [profile.release]
 panic = "abort"

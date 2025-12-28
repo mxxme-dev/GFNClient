@@ -98,6 +98,9 @@ pub fn run() {
             streaming::terminate_session,
             streaming::setup_reconnect_session,
             streaming::claim_session,
+            // Native streamer commands
+            streaming::start_native_stream,
+            streaming::is_native_streamer_available,
             // Config commands
             config::get_settings,
             config::save_settings,
@@ -122,11 +125,14 @@ pub fn run() {
             cursor::is_cursor_captured,
             cursor::get_mouse_delta,
             cursor::recenter_cursor,
-            // High-frequency mouse polling (Windows)
+            // High-frequency mouse polling (Windows, macOS, Linux)
             cursor::start_mouse_polling,
             cursor::stop_mouse_polling,
             cursor::get_accumulated_mouse_delta,
             cursor::is_mouse_polling_active,
+            // Native input pipeline info
+            cursor::is_native_input_available,
+            cursor::get_input_platform,
             // Logging commands
             logging::log_frontend,
             logging::get_log_file_path,

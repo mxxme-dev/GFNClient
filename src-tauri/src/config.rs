@@ -35,6 +35,8 @@ pub struct Settings {
     pub auto_refresh_library: bool,
     /// Enable NVIDIA Reflex low-latency mode (auto-enabled for 120+ FPS)
     pub reflex: bool,
+    /// Use native streamer instead of browser WebRTC (experimental)
+    pub use_native_streamer: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -88,6 +90,7 @@ impl Default for Settings {
             start_minimized: false,
             auto_refresh_library: true,
             reflex: true, // Enabled by default for low-latency gaming
+            use_native_streamer: false, // Disabled by default (experimental)
         }
     }
 }

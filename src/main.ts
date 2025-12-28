@@ -354,7 +354,8 @@ interface Settings {
   discord_show_stats?: boolean;
   proxy?: string;
   disable_telemetry: boolean;
-  reflex?: boolean; // NVIDIA Reflex low-latency mode
+  reflex?: boolean;
+  use_native_streamer?: boolean;
 }
 
 interface ProxyConfig {
@@ -455,6 +456,7 @@ let currentRegion = "auto"; // Preferred region (auto = lowest ping)
 let cachedServers: Server[] = []; // Cached server latency data
 let isTestingLatency = false; // Flag to prevent concurrent latency tests
 let reflexEnabled = true; // NVIDIA Reflex low-latency mode (auto-enabled for 120+ FPS)
+let useNativeStreamer = false; // Use native streamer instead of browser WebRTC
 
 // PrintedWaste queue data cache
 let cachedQueueData: PrintedWasteQueueResponse | null = null;
@@ -1758,6 +1760,29 @@ async function loadSettings() {
     const reflexEl = document.getElementById("reflex-setting") as HTMLInputElement;
     if (reflexEl) reflexEl.checked = reflexEnabled;
 
+    // Native streamer setting
+    useNativeStreamer = settings.use_native_streamer === true;
+    const nativeStreamerEl = document.getElementById("native-streamer-setting") as HTMLInputElement;
+    if (nativeStreamerEl) nativeStreamerEl.checked = useNativeStreamer;
+
+    // Check if native streamer is available and update hint
+    try {
+      const isAvailable = await invoke<boolean>("is_native_streamer_available");
+      const hintEl = document.getElementById("native-streamer-hint");
+      if (hintEl) {
+        if (isAvailable) {
+          hintEl.textContent = "Hardware-accelerated streaming with lower latency. Opens in a separate window.";
+          hintEl.style.color = "";
+        } else {
+          hintEl.textContent = "Native streamer not available. Build with: cargo build --features native-streamer --bin gfn-streamer --release";
+          hintEl.style.color = "#ff6b6b";
+          if (nativeStreamerEl) nativeStreamerEl.disabled = true;
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to check native streamer availability:", e);
+    }
+
   } catch (error) {
     console.warn("Failed to load settings:", error);
   }
@@ -2489,14 +2514,36 @@ async function connectToExistingSession(session: ActiveSession) {
     updateStreamingStatus(`Connected to ${claimResult.gpuType || session.gpuType || "GPU"}`);
     showStreamingInfo(streamingResult);
 
-    // Create fullscreen streaming container
-    const streamContainer = createStreamingContainer(gameName);
-
-    // Initialize WebRTC streaming
+    // Initialize streaming
     const streamingOptions: StreamingOptions = {
       resolution: session.resolution || currentResolution,
       fps: session.fps || currentFps
     };
+
+    // Check if native streamer should be used
+    if (useNativeStreamer) {
+      try {
+        const isAvailable = await invoke<boolean>("is_native_streamer_available");
+        if (isAvailable) {
+          console.log("Using native streamer for reconnect");
+          updateStreamingStatus("Starting native streamer...");
+          await startNativeStreamer(streamingResult, streamingOptions);
+          // Native streamer runs in separate window, just show minimal UI
+          updateStreamingStatus("Streaming in native window");
+          console.log("Connected to existing session via native streamer");
+          return;
+        } else {
+          console.warn("Native streamer not available, falling back to browser WebRTC");
+        }
+      } catch (e) {
+        console.warn("Failed to start native streamer, falling back to browser WebRTC:", e);
+      }
+    }
+
+    // Create fullscreen streaming container for browser WebRTC
+    const streamContainer = createStreamingContainer(gameName);
+
+    // Initialize browser WebRTC streaming
     await initializeStreaming(streamingResult, accessToken, streamContainer, streamingOptions);
 
     // Set up input capture
@@ -3697,18 +3744,40 @@ async function launchGame(game: Game) {
     // Show streaming info
     showStreamingInfo(streamingResult);
 
-    // Phase 3: Initialize WebRTC video streaming
+    // Phase 3: Initialize video streaming
     updateStreamingStatus("Starting video stream...");
 
-    // Create fullscreen streaming container
+    // Streaming options
+    const streamingOptions: StreamingOptions = {
+      resolution: currentResolution,
+      fps: currentFps
+    };
+
+    // Check if native streamer should be used
+    if (useNativeStreamer) {
+      try {
+        const isAvailable = await invoke<boolean>("is_native_streamer_available");
+        if (isAvailable) {
+          console.log("Using native streamer for game launch");
+          updateStreamingStatus("Starting native streamer...");
+          await startNativeStreamer(streamingResult, streamingOptions);
+          // Native streamer runs in separate window
+          updateStreamingStatus("Streaming in native window");
+          console.log("Game streaming via native streamer");
+          return;
+        } else {
+          console.warn("Native streamer not available, falling back to browser WebRTC");
+        }
+      } catch (e) {
+        console.warn("Failed to start native streamer, falling back to browser WebRTC:", e);
+      }
+    }
+
+    // Create fullscreen streaming container for browser WebRTC
     const streamContainer = createStreamingContainer(game.title);
 
     try {
-      // Initialize WebRTC streaming with user's selected resolution/fps
-      const streamingOptions: StreamingOptions = {
-        resolution: currentResolution,
-        fps: currentFps
-      };
+      // Initialize browser WebRTC streaming
       await initializeStreaming(streamingResult, accessToken, streamContainer, streamingOptions);
 
       // Set up input capture
@@ -3774,6 +3843,60 @@ async function launchGame(game: Game) {
 
     alert(`Failed to launch game: ${error}`);
   }
+}
+
+// Native streamer configuration interface
+interface NativeStreamerConfig {
+  server: string;
+  session_id: string;
+  token?: string;
+  width: number;
+  height: number;
+  fps: number;
+  fullscreen: boolean;
+  no_hwaccel: boolean;
+}
+
+// Start native streamer process
+async function startNativeStreamer(
+  streamingResult: { session_id: string; server_ip: string | null; signaling_url: string | null },
+  options: StreamingOptions
+): Promise<number> {
+  // Extract server hostname from signaling URL or server IP
+  let server = "";
+  if (streamingResult.signaling_url) {
+    // Extract hostname from URL like wss://80-84-170-155.cloudmatchbeta.nvidiagrid.net/nvst/
+    const match = streamingResult.signaling_url.match(/(?:wss?|rtsps?):\/\/([^:/]+)/);
+    if (match) {
+      server = match[1];
+    }
+  }
+  if (!server && streamingResult.server_ip) {
+    server = streamingResult.server_ip;
+  }
+  if (!server) {
+    throw new Error("No server address available for native streamer");
+  }
+
+  // Parse resolution
+  const [width, height] = options.resolution.split("x").map(Number);
+
+  const config: NativeStreamerConfig = {
+    server,
+    session_id: streamingResult.session_id,
+    width: width || 1920,
+    height: height || 1080,
+    fps: options.fps || 60,
+    fullscreen: true,
+    no_hwaccel: false,
+  };
+
+  console.log("Starting native streamer with config:", config);
+
+  const pid = await invoke<number>("start_native_stream", { config });
+  console.log("Native streamer started with PID:", pid);
+
+  return pid;
 }
 
 // Create fullscreen streaming container
@@ -4892,6 +5015,7 @@ async function saveSettings() {
   const discordEl = document.getElementById("discord-setting") as HTMLInputElement;
   const discordStatsEl = document.getElementById("discord-stats-setting") as HTMLInputElement;
   const reflexEl = document.getElementById("reflex-setting") as HTMLInputElement;
+  const nativeStreamerEl = document.getElementById("native-streamer-setting") as HTMLInputElement;
 
   // Get dropdown values
   const resolution = getDropdownValue("resolution-setting") || "1920x1080";
@@ -4904,6 +5028,7 @@ async function saveSettings() {
   discordRpcEnabled = discordEl?.checked || false;
   discordShowStats = discordStatsEl?.checked || false;
   reflexEnabled = reflexEl?.checked ?? true;
+  useNativeStreamer = nativeStreamerEl?.checked || false;
   currentResolution = resolution;
   currentFps = parseInt(fps, 10);
   currentCodec = codec;
@@ -4927,6 +5052,7 @@ async function saveSettings() {
     proxy: proxyEl?.value || undefined,
     disable_telemetry: telemetryEl?.checked || true,
     reflex: reflexEnabled,
+    use_native_streamer: useNativeStreamer,
   };
 
   try {

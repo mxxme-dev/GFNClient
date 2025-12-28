@@ -1269,12 +1269,19 @@ function createVideoElement(): HTMLVideoElement {
   // Request hardware acceleration
   (video as any).mozPreservesPitch = false;
 
+  // === LOW LATENCY CSS ===
+  // Force GPU compositing layer to minimize rendering latency
+  // translateZ(0) creates a new compositor layer, avoiding main thread repaints
+  // will-change hints the browser to optimize for transform changes
   video.style.cssText = `
     width: 100%;
     height: 100%;
     background: #000;
     object-fit: contain;
     pointer-events: auto;
+    transform: translateZ(0);
+    will-change: transform;
+    backface-visibility: hidden;
   `;
 
   // Prevent pausing the stream
@@ -2638,6 +2645,23 @@ const isMacOS = navigator.platform.toUpperCase().includes("MAC") ||
   navigator.userAgent.toUpperCase().includes("MAC");
 const isWindows = navigator.platform.toUpperCase().includes("WIN") ||
   navigator.userAgent.toUpperCase().includes("WIN");
+const isLinux = navigator.platform.toUpperCase().includes("LINUX") ||
+  navigator.userAgent.toUpperCase().includes("LINUX");
+
+// Native input pipeline state
+let nativeInputAvailable = false;
+let nativeInputPlatform = "unknown";
+
+// Check native input availability on load
+(async () => {
+  try {
+    nativeInputAvailable = await invoke<boolean>("is_native_input_available");
+    nativeInputPlatform = await invoke<string>("get_input_platform");
+    console.log(`Native input: available=${nativeInputAvailable}, platform=${nativeInputPlatform}`);
+  } catch (e) {
+    console.log("Native input check failed (expected in browser):", e);
+  }
+})();
 
 // Track if we're using native cursor capture (bypasses browser pointer lock)
 // This is used on macOS (Core Graphics) and Windows (Win32 ClipCursor)
@@ -2690,10 +2714,14 @@ export function getInputLatencyStats(): { ipc: number; send: number; total: numb
   };
 }
 
-// Start high-frequency mouse polling on Windows
+// Start high-frequency mouse polling on supported platforms (Windows, macOS, Linux)
 // Uses native 1000Hz polling thread + MessageChannel for minimal latency scheduling
 const startMousePolling = async () => {
-  if (!isWindows || mousePollingActive) return;
+  if (mousePollingActive) return;
+  if (!nativeInputAvailable) {
+    console.log("Native input not available on this platform");
+    return;
+  }
 
   try {
     const started = await invoke<boolean>("start_mouse_polling");
@@ -2834,8 +2862,8 @@ export async function setInputCaptureMode(mode: 'pointerlock' | 'absolute'): Pro
           if (video) video.style.cursor = 'none';
           if (container) container.style.cursor = 'none';
           document.body.style.cursor = 'none';
-          // Start high-frequency mouse polling on Windows
-          if (isWindows) {
+          // Start high-frequency mouse polling on supported platforms
+          if (nativeInputAvailable) {
             await startMousePolling();
           }
           console.log(`${platform}: Native cursor capture enabled`);
@@ -2852,7 +2880,7 @@ export async function setInputCaptureMode(mode: 'pointerlock' | 'absolute'): Pro
         }
       } else {
         // Stop mouse polling first
-        if (isWindows) {
+        if (nativeInputAvailable) {
           await stopMousePolling();
         }
         // Release native cursor capture
@@ -2880,8 +2908,8 @@ export async function suspendCursorCapture(): Promise<void> {
   if (!nativeCursorCaptured) return;
 
   try {
-    // Stop mouse polling first
-    if (isWindows) {
+    // Stop mouse polling first on supported platforms
+    if (nativeInputAvailable) {
       await stopMousePolling();
     }
     await invoke<boolean>("release_cursor");
@@ -2902,8 +2930,8 @@ export async function resumeCursorCapture(): Promise<void> {
   try {
     const captured = await invoke<boolean>("capture_cursor");
     if (captured) {
-      // Restart mouse polling on Windows
-      if (isWindows) {
+      // Restart mouse polling on supported platforms
+      if (nativeInputAvailable) {
         await startMousePolling();
       }
       console.log("Native cursor capture resumed (window focus)");
@@ -2970,9 +2998,10 @@ export function setupInputCapture(videoElement: HTMLVideoElement): () => void {
       const canSendRelative = hasPointerLock || (nativeCursorCaptured && inputCaptureActive);
 
       if (canSendRelative) {
-        // Windows with high-frequency polling: skip browser events, polling handles it
-        if (isWindows && mousePollingActive) {
-          return; // Mouse input handled by 1000Hz native polling thread
+        // Native input pipeline: skip browser events entirely on supported platforms
+        // The 1000Hz native polling thread handles mouse input directly
+        if (nativeInputAvailable && mousePollingActive) {
+          return; // Mouse input handled by native 1000Hz polling thread (Windows/macOS/Linux)
         }
 
         // macOS native or browser pointer lock: use movementX/movementY

@@ -1765,3 +1765,148 @@ pub async fn stop_streaming_flow(
     log::info!("Streaming flow stopped");
     Ok(())
 }
+
+// ============================================================================
+// NATIVE STREAMER LAUNCHER
+// ============================================================================
+
+/// Configuration for launching the native streamer
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct NativeStreamerConfig {
+    pub server: String,
+    pub session_id: String,
+    pub token: Option<String>,
+    pub width: u32,
+    pub height: u32,
+    pub fullscreen: bool,
+    pub no_hwaccel: bool,
+}
+
+/// Launch the native GFN streamer as a separate process
+/// This provides better performance than the browser-based WebRTC streaming
+#[command]
+pub async fn start_native_stream(config: NativeStreamerConfig) -> Result<u32, String> {
+    use std::process::Command;
+
+    log::info!(
+        "Launching native streamer: server={}, session={}, {}x{}, fullscreen={}",
+        config.server,
+        config.session_id,
+        config.width,
+        config.height,
+        config.fullscreen
+    );
+
+    // Find the native streamer binary
+    // In development, it's in target/release or target/debug
+    // In production, it should be bundled alongside the main executable
+    let exe_path = std::env::current_exe()
+        .map_err(|e| format!("Failed to get current exe path: {}", e))?;
+
+    let exe_dir = exe_path
+        .parent()
+        .ok_or("Failed to get exe directory")?;
+
+    // Try to find gfn-streamer in the same directory as the main app
+    #[cfg(target_os = "windows")]
+    let streamer_name = "gfn-streamer.exe";
+    #[cfg(not(target_os = "windows"))]
+    let streamer_name = "gfn-streamer";
+
+    let streamer_path = exe_dir.join(streamer_name);
+
+    // If not found in exe dir, try the target/release directory (development)
+    let streamer_path = if streamer_path.exists() {
+        streamer_path
+    } else {
+        // Development fallback: look in target/release
+        let dev_path = exe_dir
+            .parent() // target/debug or target/release
+            .and_then(|p| p.parent()) // target
+            .map(|p| p.join("release").join(streamer_name));
+
+        if let Some(ref path) = dev_path {
+            if path.exists() {
+                path.clone()
+            } else {
+                return Err(format!(
+                    "Native streamer not found at {:?} or {:?}. Build it with: cargo build --features native-streamer --bin gfn-streamer --release",
+                    streamer_path, path
+                ));
+            }
+        } else {
+            return Err(format!(
+                "Native streamer not found at {:?}",
+                streamer_path
+            ));
+        }
+    };
+
+    log::info!("Using native streamer at: {:?}", streamer_path);
+
+    // Build command arguments
+    let mut cmd = Command::new(&streamer_path);
+    cmd.arg("--server").arg(&config.server)
+        .arg("--session-id").arg(&config.session_id)
+        .arg("--width").arg(config.width.to_string())
+        .arg("--height").arg(config.height.to_string());
+
+    if let Some(ref token) = config.token {
+        cmd.arg("--token").arg(token);
+    }
+
+    if config.fullscreen {
+        cmd.arg("--fullscreen");
+    }
+
+    if config.no_hwaccel {
+        cmd.arg("--no-hwaccel");
+    }
+
+    // Spawn the process
+    let child = cmd
+        .spawn()
+        .map_err(|e| format!("Failed to launch native streamer: {}", e))?;
+
+    let pid = child.id();
+    log::info!("Native streamer launched with PID: {}", pid);
+
+    Ok(pid)
+}
+
+/// Check if the native streamer binary is available
+#[command]
+pub fn is_native_streamer_available() -> bool {
+    let exe_path = match std::env::current_exe() {
+        Ok(p) => p,
+        Err(_) => return false,
+    };
+
+    let exe_dir = match exe_path.parent() {
+        Some(d) => d,
+        None => return false,
+    };
+
+    #[cfg(target_os = "windows")]
+    let streamer_name = "gfn-streamer.exe";
+    #[cfg(not(target_os = "windows"))]
+    let streamer_name = "gfn-streamer";
+
+    // Check in exe directory
+    if exe_dir.join(streamer_name).exists() {
+        return true;
+    }
+
+    // Check in target/release (development)
+    if let Some(dev_path) = exe_dir
+        .parent()
+        .and_then(|p| p.parent())
+        .map(|p| p.join("release").join(streamer_name))
+    {
+        if dev_path.exists() {
+            return true;
+        }
+    }
+
+    false
+}
