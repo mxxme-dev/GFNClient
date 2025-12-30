@@ -4,11 +4,14 @@ use std::sync::Mutex;
 use tauri::command;
 
 /// Discord Application ID for OpenNOW
-/// Created at https://discord.com/developers/applications
+/// Created at [https://discord.com/developers/applications](https://discord.com/developers/applications)
 const DISCORD_APP_ID: &str = "1453497742662959145"; // Replace with your Discord App ID
 
 /// GitHub repository URL
 const GITHUB_URL: &str = "https://github.com/zortos293/GFNClient";
+
+/// Discord presence prefix
+const PRESENCE_PREFIX: &str = "[mxx fork]";
 
 /// Discord presence state
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -44,7 +47,7 @@ pub async fn init_discord() -> Result<bool, String> {
                 // Set initial presence
                 let _ = client.set_activity(
                     activity::Activity::new()
-                        .state("Browsing games")
+                        .state(format!("{} Browsing games", PRESENCE_PREFIX))
                         .assets(
                             activity::Assets::new()
                                 .large_image("gfn_logo")
@@ -104,8 +107,8 @@ pub async fn set_game_presence(
                 stats_parts.push(format!("{}ms", ms));
             }
 
-            // State shows region + stats
-            let state = if let Some(reg) = &region {
+            // State shows region + stats (with prefix)
+            let state_content = if let Some(reg) = &region {
                 if stats_parts.is_empty() {
                     reg.clone()
                 } else {
@@ -116,6 +119,8 @@ pub async fn set_game_presence(
             } else {
                 "Playing".to_string()
             };
+
+            let state = format!("{} {}", PRESENCE_PREFIX, state_content);
 
             let activity = activity::Activity::new()
                 .state(&state)
@@ -172,7 +177,7 @@ pub async fn update_game_stats(
                 stats_parts.push(format!("{}ms", ms));
             }
 
-            let state = if let Some(reg) = &region {
+            let state_content = if let Some(reg) = &region {
                 if stats_parts.is_empty() {
                     reg.clone()
                 } else {
@@ -183,6 +188,8 @@ pub async fn update_game_stats(
             } else {
                 "Playing".to_string()
             };
+
+            let state = format!("{} {}", PRESENCE_PREFIX, state_content);
 
             // Use provided start_time to preserve elapsed time
             let timestamp = start_time.unwrap_or_else(|| {
@@ -230,11 +237,12 @@ pub async fn set_queue_presence(
         let mut lock = guard.lock().map_err(|e| format!("Lock error: {}", e))?;
 
         if let Some(client) = lock.as_mut() {
-            let state = match queue_position {
+            let state_content = match queue_position {
                 Some(pos) => format!("In queue: #{}", pos),
                 None => "Waiting in queue".to_string(),
             };
 
+            let state = format!("{} {}", PRESENCE_PREFIX, state_content);
             let details = format!("Waiting to play {}", game_name);
             let mut activity = activity::Activity::new()
                 .state(&state)
@@ -284,7 +292,7 @@ pub async fn set_browsing_presence() -> Result<(), String> {
             client
                 .set_activity(
                     activity::Activity::new()
-                        .state("Browsing games")
+                        .state(format!("{} Browsing games", PRESENCE_PREFIX))
                         .assets(
                             activity::Assets::new()
                                 .large_image("gfn_logo")
